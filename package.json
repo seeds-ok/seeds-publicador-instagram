@@ -1,0 +1,13 @@
+{
+  "name": "seeds-publicador-instagram",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Publica en Instagram los posteos programados desde el Calendario SEEDS.",
+  "main": "publish.js",
+  "scripts": {
+    "start": "node publish.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}
