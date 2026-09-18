@@ -23,14 +23,31 @@ function sleep(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
-function igCreateContainer(mediaUrl, isVideo, caption) {
-  var params = new URLSearchParams({ caption: caption || '', access_token: IG_ACCESS_TOKEN });
+function igCreateContainer(mediaUrl, isVideo, caption, isCarouselItem) {
+  var params = new URLSearchParams({ access_token: IG_ACCESS_TOKEN });
+  if (caption) params.set('caption', caption);
+  if (isCarouselItem) params.set('is_carousel_item', 'true');
   if (isVideo) {
-    params.set('media_type', 'REELS');
+    params.set('media_type', isCarouselItem ? 'VIDEO' : 'REELS');
     params.set('video_url', mediaUrl);
   } else {
     params.set('image_url', mediaUrl);
   }
+  return fetch(GRAPH + '/' + IG_USER_ID + '/media?' + params.toString(), { method: 'POST' })
+    .then(function (res) { return res.json(); })
+    .then(function (body) {
+      if (body.error) throw new Error(body.error.message);
+      return body.id;
+    });
+}
+
+function igCreateCarouselContainer(childIds, caption) {
+  var params = new URLSearchParams({
+    media_type: 'CAROUSEL',
+    children: childIds.join(','),
+    access_token: IG_ACCESS_TOKEN
+  });
+  if (caption) params.set('caption', caption);
   return fetch(GRAPH + '/' + IG_USER_ID + '/media?' + params.toString(), { method: 'POST' })
     .then(function (res) { return res.json(); })
     .then(function (body) {
@@ -74,19 +91,45 @@ function igGetPermalink(mediaId) {
     .catch(function () { return ''; });
 }
 
+function publishSingle(mediaItem, caption) {
+  var isVideo = !!(mediaItem.contentType && mediaItem.contentType.indexOf('video') === 0);
+  return igCreateContainer(mediaItem.url, isVideo, caption, false)
+    .then(function (creationId) { return waitUntilReady(creationId).then(function () { return creationId; }); });
+}
+
+function publishCarousel(items, caption) {
+  var childIds = [];
+  var chain = Promise.resolve();
+  items.forEach(function (mediaItem) {
+    chain = chain.then(function () {
+      var isVideo = !!(mediaItem.contentType && mediaItem.contentType.indexOf('video') === 0);
+      return igCreateContainer(mediaItem.url, isVideo, null, true).then(function (childId) {
+        return waitUntilReady(childId).then(function () { childIds.push(childId); });
+      });
+    });
+  });
+  return chain.then(function () {
+    return igCreateCarouselContainer(childIds, caption);
+  }).then(function (carouselId) {
+    return waitUntilReady(carouselId).then(function () { return carouselId; });
+  });
+}
+
 function publishOne(doc) {
   var data = doc.data();
-  var mediaItem = (data.mediaIds || [])[data.publishMediaIndex || 0];
-  if (!mediaItem || !mediaItem.url) {
+  var indices = Array.isArray(data.publishMediaIndices) && data.publishMediaIndices.length
+    ? data.publishMediaIndices
+    : [typeof data.publishMediaIndex === 'number' ? data.publishMediaIndex : 0];
+  indices = indices.slice(0, 10);
+  var items = indices.map(function (i) { return (data.mediaIds || [])[i]; }).filter(function (x) { return x && x.url; });
+  if (!items.length) {
     return doc.ref.update({ publishStatus: 'failed', publishError: 'No hay ningún archivo cargado para publicar.' });
   }
-  var isVideo = !!(mediaItem.contentType && mediaItem.contentType.indexOf('video') === 0);
   var caption = [data.copyFinal, data.hashtags].filter(Boolean).join('\n\n');
+  var creationPromise = items.length > 1 ? publishCarousel(items, caption) : publishSingle(items[0], caption);
 
-  return igCreateContainer(mediaItem.url, isVideo, caption)
-    .then(function (creationId) {
-      return waitUntilReady(creationId).then(function () { return igPublish(creationId); });
-    })
+  return creationPromise
+    .then(function (creationId) { return igPublish(creationId); })
     .then(function (publishedId) {
       return igGetPermalink(publishedId).then(function (permalink) {
         return doc.ref.update({
