@@ -23,12 +23,13 @@ function sleep(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
-function igCreateContainer(mediaUrl, isVideo, caption, isCarouselItem) {
+function igCreateContainer(mediaUrl, isVideo, caption, isCarouselItem, mediaTypeOverride) {
   var params = new URLSearchParams({ access_token: IG_ACCESS_TOKEN });
   if (caption) params.set('caption', caption);
   if (isCarouselItem) params.set('is_carousel_item', 'true');
+  var mediaType = mediaTypeOverride || (isVideo ? (isCarouselItem ? 'VIDEO' : 'REELS') : null);
+  if (mediaType) params.set('media_type', mediaType);
   if (isVideo) {
-    params.set('media_type', isCarouselItem ? 'VIDEO' : 'REELS');
     params.set('video_url', mediaUrl);
   } else {
     params.set('image_url', mediaUrl);
@@ -97,6 +98,13 @@ function publishSingle(mediaItem, caption) {
     .then(function (creationId) { return waitUntilReady(creationId).then(function () { return creationId; }); });
 }
 
+function publishStory(mediaItem) {
+  var isVideo = !!(mediaItem.contentType && mediaItem.contentType.indexOf('video') === 0);
+  // Las historias no llevan caption.
+  return igCreateContainer(mediaItem.url, isVideo, null, false, 'STORIES')
+    .then(function (creationId) { return waitUntilReady(creationId).then(function () { return creationId; }); });
+}
+
 function publishCarousel(items, caption) {
   var childIds = [];
   var chain = Promise.resolve();
@@ -126,7 +134,14 @@ function publishOne(doc) {
     return doc.ref.update({ publishStatus: 'failed', publishError: 'No hay ningún archivo cargado para publicar.' });
   }
   var caption = [data.copyFinal, data.hashtags].filter(Boolean).join('\n\n');
-  var creationPromise = items.length > 1 ? publishCarousel(items, caption) : publishSingle(items[0], caption);
+  var creationPromise;
+  if (data.publishType === 'story') {
+    creationPromise = publishStory(items[0]);
+  } else if (items.length > 1) {
+    creationPromise = publishCarousel(items, caption);
+  } else {
+    creationPromise = publishSingle(items[0], caption);
+  }
 
   return creationPromise
     .then(function (creationId) { return igPublish(creationId); })
